@@ -10,6 +10,7 @@ use OVAC\IDoc\Tools\ResponseResolver;
 use OVAC\IDoc\Tools\Traits\ParamHelpers;
 use ReflectionClass;
 use ReflectionMethod;
+use Symfony\Component\Yaml\Yaml;
 
 class IDocGenerator
 {
@@ -36,7 +37,7 @@ class IDocGenerator
     }
 
     /**
-     * @param  \Illuminate\Routing\Route $route
+     * @param \Illuminate\Routing\Route $route
      * @param array $apply Rules to apply when generating documentation for this route
      *
      * @return array
@@ -91,10 +92,10 @@ class IDocGenerator
     protected function getPathParametersFromDocBlock(array $tags)
     {
         $parameters = collect($tags)
-            ->filter(function ($tag) {
+            ->filter(function($tag) {
                 return $tag->getName() === 'pathParam';
             })
-            ->mapWithKeys(function ($tag) {
+            ->mapWithKeys(function($tag) {
                 preg_match('/(.+?)\s+(.+?)\s+(required\s+)?(.*)/', $tag->getContent(), $content);
                 if (empty($content)) {
                     // this means only name and type were supplied
@@ -112,10 +113,10 @@ class IDocGenerator
                 }
 
                 $type = $this->normalizeParameterType($type);
-                list($description, $example) = $this->parseDescription($description, $type);
+                list($description, $example, $properties) = $this->parseDescription($description, $type);
                 $value = is_null($example) ? $this->generateDummyValue($type) : $example;
 
-                return [$name => compact('type', 'description', 'required', 'value')];
+                return [$name => compact('type', 'description', 'required', 'value', 'properties')];
             })->toArray();
 
         return $parameters;
@@ -129,10 +130,10 @@ class IDocGenerator
     protected function getBodyParametersFromDocBlock(array $tags)
     {
         $parameters = collect($tags)
-            ->filter(function ($tag) {
+            ->filter(function($tag) {
                 return $tag instanceof Tag && $tag->getName() === 'bodyParam';
             })
-            ->mapWithKeys(function ($tag) {
+            ->mapWithKeys(function($tag) {
                 preg_match('/(.+?)\s+(.+?)\s+(required\s+)?(.*)/', $tag->getContent(), $content);
                 if (empty($content)) {
                     // this means only name and type were supplied
@@ -150,10 +151,10 @@ class IDocGenerator
                 }
 
                 $type = $this->normalizeParameterType($type);
-                list($description, $example) = $this->parseDescription($description, $type);
+                list($description, $example, $properties) = $this->parseDescription($tag->getDescription(), $type);
                 $value = is_null($example) ? $this->generateDummyValue($type) : $example;
 
-                return [$name => compact('type', 'description', 'required', 'value')];
+                return [$name => compact('type', 'description', 'required', 'value', 'properties')];
             })->toArray();
 
         return $parameters;
@@ -167,11 +168,11 @@ class IDocGenerator
     protected function getAuthStatusFromDocBlock(array $tags)
     {
         $authTag = collect($tags)
-            ->first(function ($tag) {
+            ->first(function($tag) {
                 return $tag instanceof Tag && strtolower($tag->getName()) === 'authenticated';
             });
 
-        return (bool) $authTag;
+        return (bool)$authTag;
     }
 
     /**
@@ -214,10 +215,10 @@ class IDocGenerator
     protected function getQueryParametersFromDocBlock(array $tags)
     {
         $parameters = collect($tags)
-            ->filter(function ($tag) {
+            ->filter(function($tag) {
                 return $tag instanceof Tag && $tag->getName() === 'queryParam';
             })
-            ->mapWithKeys(function ($tag) {
+            ->mapWithKeys(function($tag) {
                 preg_match('/(.+?)\s+(.+?)\s+(required\s+)?(.*)/', $tag->getContent(), $content);
                 if (empty($content)) {
                     // this means only name and type were supplied
@@ -235,10 +236,10 @@ class IDocGenerator
                 }
 
                 $type = $this->normalizeParameterType($type);
-                list($description, $example) = $this->parseDescription($description, $type);
+                list($description, $example, $properties) = $this->parseDescription($description, $type);
                 $value = is_null($example) ? $this->generateDummyValue($type) : $example;
 
-                return [$name => compact('type', 'description', 'required', 'value')];
+                return [$name => compact('type', 'description', 'required', 'value', 'properties')];
             })->toArray();
 
         return $parameters;
@@ -276,25 +277,25 @@ class IDocGenerator
     {
         $faker = Factory::create();
         $fakes = [
-            'integer' => function () {
+            'integer' => function() {
                 return rand(1, 20);
             },
-            'number' => function () use ($faker) {
+            'number' => function() use ($faker) {
                 return $faker->randomFloat();
             },
-            'float' => function () use ($faker) {
+            'float' => function() use ($faker) {
                 return $faker->randomFloat();
             },
-            'boolean' => function () use ($faker) {
+            'boolean' => function() use ($faker) {
                 return $faker->boolean();
             },
-            'string' => function () use ($faker) {
+            'string' => function() use ($faker) {
                 return $faker->asciify('************');
             },
-            'array' => function () {
+            'array' => function() {
                 return '[]';
             },
-            'object' => function () {
+            'object' => function() {
                 return '{}';
             },
         ];
@@ -315,15 +316,59 @@ class IDocGenerator
      */
     private function parseDescription(string $description, string $type)
     {
+        $properties = $this->parseProperties($description);
+        list($description, $example) = $this->parseExample($description, $type);
+
+        return [$description, $example, $properties];
+    }
+
+    private function parseProperties(string $description)
+    {
+        if (preg_match('/\s*(properties:\s*(.*)[\w\W]*)/m', $description, $content)) {
+            return $this->parsePropertiesYaml($content[1]);
+        } else {
+            return null;
+        }
+    }
+
+    private function parseExample(string $description, string $type)
+    {
+        $regex = $this->getExampleRegexForType($type);
         $example = null;
-        if (preg_match('/(.*)\s+Example:\s*(.*)\s*/', $description, $content)) {
+
+        if (preg_match($regex, $description, $content)) {
             $description = $content[1];
 
             // examples are parsed as strings by default, we need to cast them properly
-            $example = $this->castToType($content[2], $type);
+            $example = isset($content[2])
+                ? $this->castToType($content[2], $type)
+                : null;
         }
 
         return [$description, $example];
+    }
+
+    private function getExampleRegexForType(string $type)
+    {
+        switch ($type) {
+            case 'object':
+                return '/(?:.*)\n(.*)(\s+Example:\s*({(.*)[\w\W]*}))?/';
+            case 'array':
+                return '/(?:.*)\n(.*)(\s+Example:\s*(\[(.*)[\w\W]*\]))?/';
+            default:
+                return '/(.*)\s+Example:\s*(.*)\s*/';
+        }
+    }
+
+    private function parsePropertiesYaml(string $yaml)
+    {
+        try {
+            $yaml = Yaml::parse($yaml);
+            return $yaml['properties'];
+        } catch (\Exception $e) {
+            print_r("Error parsing properties yaml: {$e->getMessage()}");
+            return null;
+        }
     }
 
     /**
@@ -347,6 +392,10 @@ class IDocGenerator
         //because PHP considers string 'false' as true.
         if ($value == 'false' && $type == 'boolean') {
             return false;
+        }
+
+        if (in_array($type, ['json', 'object', 'array'])) {
+            return $value;
         }
 
         if (isset($casts[$type])) {

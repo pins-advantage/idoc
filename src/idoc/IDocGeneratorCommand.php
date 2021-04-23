@@ -65,7 +65,7 @@ class IDocGeneratorCommand extends Command
     }
 
     /**
-     * @param  Collection $parsedRoutes
+     * @param Collection $parsedRoutes
      *
      * @return void
      */
@@ -117,9 +117,9 @@ class IDocGeneratorCommand extends Command
     /**
      * @param $route
      *
+     * @return bool
      * @throws ReflectionException
      *
-     * @return bool
      */
     private function isRouteVisibleForDocumentation($route)
     {
@@ -136,7 +136,7 @@ class IDocGeneratorCommand extends Command
             $phpdoc = new DocBlock($comment);
 
             return collect($phpdoc->getTags())
-                ->filter(function ($tag) use ($route) {
+                ->filter(function($tag) use ($route) {
                     return $tag->getName() === 'hideFromAPIDocumentation';
                 })
                 ->isEmpty();
@@ -154,13 +154,15 @@ class IDocGeneratorCommand extends Command
      */
     private function generateOpenApi3Config(Collection $routes)
     {
-        $result = $routes->map(function ($routeGroup, $groupName) use ($routes) {
+        $result = $routes->map(function($routeGroup, $groupName) use ($routes) {
 
-            return collect($routeGroup)->map(function ($route) use ($groupName, $routes, $routeGroup) {
+            return collect($routeGroup)->map(function($route) use ($groupName, $routes, $routeGroup) {
 
-                $methodGroup = $routeGroup->where('uri', $route['uri'])->mapWithKeys(function ($route) use ($groupName, $routes) {
+                $methodGroup = $routeGroup->where('uri', $route['uri'])->mapWithKeys(function($route) use (
+                    $groupName, $routes
+                ) {
 
-                    $bodyParameters = collect($route['bodyParameters'])->map(function ($schema, $name) use ($routes) {
+                    $bodyParameters = collect($route['bodyParameters'])->map(function($schema, $name) use ($routes) {
 
                         $type = $schema['type'];
                         $default = $schema['value'];
@@ -169,7 +171,7 @@ class IDocGeneratorCommand extends Command
                             $type = 'number';
                         }
 
-                        if ($type === 'json' && $default) {
+                        if (in_array($type, ['json', 'object', 'array']) && $default) {
                             $type = 'object';
                             $default = json_decode($default);
                         }
@@ -181,56 +183,57 @@ class IDocGeneratorCommand extends Command
                             'required' => $schema['required'],
                             'type' => $type,
                             'default' => $default,
+                            'properties' => $schema['properties']
                         ];
                     });
 
                     $jsonParameters = [
                         'application/json' => [
-                            'schema' => [
-                                'type' => 'object',
-                            ]
-                             + (
+                            'schema' => ['type' => 'object']
+
+                                + (
                                 count($required = $bodyParameters
-                                        ->values()
-                                        ->where('required', true)
-                                        ->pluck('name'))
-                                ? ['required' => $required]
-                                : []
-                            )
+                                    ->values()
+                                    ->where('required', true)
+                                    ->pluck('name'))
+                                    ? ['required' => $required]
+                                    : []
+                                )
 
-                             + (
+                                + (
                                 count($properties = $bodyParameters
-                                        ->values()
-                                        ->filter()
-                                        ->mapWithKeys(function ($parameter) use ($routes) {
-                                            return [
-                                                $parameter['name'] => [
-                                                    'type' => $parameter['type'],
-                                                    'example' => $parameter['default'],
-                                                    'description' => $parameter['description'],
-                                                ],
-                                            ];
-                                        }))
-                                ? ['properties' => $properties]
-                                : []
-                            )
+                                    ->values()
+                                    ->filter()
+                                    ->mapWithKeys(function($parameter) use ($routes) {
+                                        return [
+                                            $parameter['name'] => [
+                                                'type' => $parameter['type'],
+                                                'example' => $parameter['default'],
+                                                'description' => $parameter['description'],
+                                                'properties' => $parameter['properties'],
+                                            ],
+                                        ];
+                                    }))
+                                    ? ['properties' => $properties]
+                                    : []
+                                )
 
-                             + (
+                                + (
                                 count($properties = $bodyParameters
-                                        ->values()
-                                        ->filter()
-                                        ->mapWithKeys(
-                                            function ($parameter) {
-                                                return [$parameter['name'] => $parameter['default']];
-                                            }
-                                        ))
-                                ? ['example' => $properties]
-                                : []
-                            )
+                                    ->values()
+                                    ->filter()
+                                    ->mapWithKeys(
+                                        function($parameter) {
+                                            return [$parameter['name'] => $parameter['default']];
+                                        }
+                                    ))
+                                    ? ['example' => $properties]
+                                    : []
+                                )
                         ],
                     ];
 
-                    $queryParameters = collect($route['queryParameters'])->map(function ($schema, $name) {
+                    $queryParameters = collect($route['queryParameters'])->map(function($schema, $name) {
                         return [
                             'in' => 'query',
                             'name' => $name,
@@ -243,7 +246,8 @@ class IDocGeneratorCommand extends Command
                         ];
                     });
 
-                    $pathParameters = collect($route['pathParameters'] ?? [])->map(function ($schema, $name) use ($route) {
+                    $pathParameters = collect($route['pathParameters'] ?? [])->map(function($schema, $name) use ($route
+                    ) {
                         return [
                             'in' => 'path',
                             'name' => $name,
@@ -256,7 +260,7 @@ class IDocGeneratorCommand extends Command
                         ];
                     });
 
-                    $headerParameters = collect($route['headers'])->map(function ($value, $header) use ($route) {
+                    $headerParameters = collect($route['headers'])->map(function($value, $header) use ($route) {
 
                         if ($header === 'Authorization') {
                             return;
@@ -279,30 +283,30 @@ class IDocGeneratorCommand extends Command
                         strtolower($route['methods'][0]) => (
 
                             (
-                                $route['authenticated']
+                            $route['authenticated']
                                 ? ['security' => [
-                                   collect(config('idoc.security'))->map(function () {
+                                collect(config('idoc.security'))->map(function() {
                                     return [];
                                 }),
-                                ]]
+                            ]]
                                 : []
                             )
 
-                             + ([
+                            + ([
                                 "tags" => [
                                     $groupName,
                                 ],
                                 'operationId' => $route['title'],
                                 'description' => $route['description'],
-                             ]) +
+                            ]) +
 
                             (
-                                count(array_intersect(['POST', 'PUT', 'PATCH'], $route['methods']))
+                            count(array_intersect(['POST', 'PUT', 'PATCH'], $route['methods']))
                                 ? ['requestBody' => [
-                                    'description' => $route['description'],
-                                    'required' => true,
-                                    'content' => collect($jsonParameters)->filter()->toArray(),
-                                ]]
+                                'description' => $route['description'],
+                                'required' => true,
+                                'content' => collect($jsonParameters)->filter()->toArray(),
+                            ]]
                                 : []
                             ) +
 
@@ -324,25 +328,10 @@ class IDocGeneratorCommand extends Command
                                         ->toArray()
                                 ),
 
-                                'responses' => [
-                                    200 => [
-                                        'description' => 'success',
-                                    ] +
-                                    (
-                                        count($route['response'] ?? [])
-                                        ? ['content' => [
-                                            'application/json' => [
-                                                'schema' => [
-                                                    'type' => 'object',
-                                                    'example' => json_decode($route['response'][0]['content'], true),
-                                                ],
-                                            ],
-                                        ]]
-                                        : []
-                                    ),
-                                ],
+                                'responses' => $this->generateResponses($route),
 
-                                'x-code-samples' => collect(config('idoc.language-tabs'))->map(function ($name, $lang) use ($route) {
+                                'x-code-samples' => collect(config('idoc.language-tabs'))->map(function($name,
+                                    $lang) use ($route) {
                                     return [
                                         'lang' => $name,
                                         'source' => view('idoc::languages.' . $lang, compact('route'))->render(),
@@ -367,6 +356,10 @@ class IDocGeneratorCommand extends Command
             }
         }
 
+        $baseSchema = !empty(config('idoc.base_schema'))
+            ? json_decode(file_get_contents(config('idoc.base_schema')), true)
+            : [];
+
         $collection = [
 
             'openapi' => '3.0.0',
@@ -376,8 +369,8 @@ class IDocGeneratorCommand extends Command
                 'version' => config('idoc.version'),
                 'description' => config('idoc.description'),
                 'termsOfService' => config('idoc.terms_of_service'),
-                "license" =>  !empty(config('idoc.license')) ? config('idoc.license') : null,
-                "contact" =>  config('idoc.contact'), 
+                "license" => !empty(config('idoc.license')) ? config('idoc.license') : null,
+                "contact" => config('idoc.contact'),
                 "x-logo" => [
                     "url" => config('idoc.logo'),
                     "altText" => config('idoc.title'),
@@ -389,15 +382,15 @@ class IDocGeneratorCommand extends Command
 
                 'securitySchemes' => config('idoc.security'),
 
-                'schemas' => $routes->mapWithKeys(function ($routeGroup, $groupName) {
+                'schemas' => $routes->mapWithKeys(function($routeGroup, $groupName) {
 
                     if ($groupName != 'Payment processors') {
                         return [];
                     }
 
-                    return collect($routeGroup)->mapWithKeys(function ($route) use ($groupName, $routeGroup) {
+                    return collect($routeGroup)->mapWithKeys(function($route) use ($groupName, $routeGroup) {
 
-                        $bodyParameters = collect($route['bodyParameters'])->map(function ($schema, $name) {
+                        $bodyParameters = collect($route['bodyParameters'])->map(function($schema, $name) {
 
                             $type = $schema['type'];
 
@@ -421,39 +414,39 @@ class IDocGeneratorCommand extends Command
 
                         return ["PM{$route['paymentMethod']->id}" => ['type' => 'object']
 
-                             + (
-                                count($required = $bodyParameters
-                                        ->values()
-                                        ->where('required', true)
-                                        ->pluck('name'))
+                            + (
+                            count($required = $bodyParameters
+                                ->values()
+                                ->where('required', true)
+                                ->pluck('name'))
                                 ? ['required' => $required]
                                 : []
                             )
 
-                             + (
-                                count($properties = $bodyParameters
-                                        ->values()
-                                        ->filter()
-                                        ->mapWithKeys(function ($parameter) {
-                                            return [
-                                                $parameter['name'] => [
-                                                    'type' => $parameter['type'],
-                                                    'example' => $parameter['default'],
-                                                    'description' => $parameter['description'],
-                                                ],
-                                            ];
-                                        }))
+                            + (
+                            count($properties = $bodyParameters
+                                ->values()
+                                ->filter()
+                                ->mapWithKeys(function($parameter) {
+                                    return [
+                                        $parameter['name'] => [
+                                            'type' => $parameter['type'],
+                                            'example' => $parameter['default'],
+                                            'description' => $parameter['description'],
+                                        ],
+                                    ];
+                                }))
                                 ? ['properties' => $properties]
                                 : []
                             )
 
-                             + (
-                                count($properties = $bodyParameters
-                                        ->values()
-                                        ->filter()
-                                        ->mapWithKeys(function ($parameter) {
-                                            return [$parameter['name'] => $parameter['default']];
-                                        }))
+                            + (
+                            count($properties = $bodyParameters
+                                ->values()
+                                ->filter()
+                                ->mapWithKeys(function($parameter) {
+                                    return [$parameter['name'] => $parameter['default']];
+                                }))
                                 ? ['example' => $properties]
                                 : []
                             )
@@ -469,6 +462,48 @@ class IDocGeneratorCommand extends Command
             'x-tagGroups' => config('idoc.tag_groups'),
         ];
 
-        return json_encode($collection);
+        return json_encode(array_merge_recursive($collection, $baseSchema));
+    }
+
+    /**
+     * Generate the openAPI response object for a route
+     *
+     * @param array $responseContent
+     */
+    private function generateResponses(array $route)
+    {
+        if (isset($route['response'])) {
+            if (is_array($route['response'])) {
+                return array_reduce($route['response'], function($result, $response) {
+                    $contentBody = isset($response['content']) ? $response['content'] : '{}';
+                    $status = (int)(isset($response['status']) ? $response['status'] : 200);
+                    $description = 'success';
+
+                    switch ($status) {
+                        case 204:
+                            $content = [];
+                            break;
+                        default:
+                            $content = [
+                                'application/json' => [
+                                    'schema' => [
+                                        'type' => 'object',
+                                        'example' => json_decode($contentBody, true)
+                                    ]
+                                ]
+                            ];
+                    }
+
+                    $result[$status] = [
+                        'description' => $description,
+                        'content' => $content
+                    ];
+
+                    return $result;
+                }, []);
+            }
+        }
+
+        return [200 => ['description' => 'success']];
     }
 }
