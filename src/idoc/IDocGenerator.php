@@ -8,6 +8,7 @@ use Mpociot\Reflection\DocBlock;
 use Mpociot\Reflection\DocBlock\Tag;
 use OVAC\IDoc\Tools\ResponseResolver;
 use OVAC\IDoc\Tools\Traits\ParamHelpers;
+use OVAC\IDoc\Util\ArrayUtil;
 use ReflectionClass;
 use ReflectionMethod;
 use Symfony\Component\Yaml\Yaml;
@@ -54,11 +55,7 @@ class IDocGenerator
         $bodyParameters = $this->getBodyParametersFromDocBlock($docBlock['tags']);
         $queryParameters = $this->getQueryParametersFromDocBlock($docBlock['tags']);
         $pathParameters = $this->getPathParametersFromDocBlock($docBlock['tags']);
-        $content = ResponseResolver::getResponse($route, $docBlock['tags'], [
-            'rules' => $rulesToApply,
-            'body' => $bodyParameters,
-            'query' => $queryParameters,
-        ]);
+        $responses = $this->getResponseParametersFromDocBlock($docBlock['tags']);
 
         $parsedRoute = [
             'id' => md5($this->getUri($route) . ':' . implode($this->getMethods($route))),
@@ -71,8 +68,8 @@ class IDocGenerator
             'queryParameters' => $queryParameters,
             'pathParameters' => $pathParameters,
             'authenticated' => $authenticated = $this->getAuthStatusFromDocBlock($docBlock['tags']),
-            'response' => $content,
-            'showresponse' => !empty($content),
+            'responses' => $responses,
+            'showresponse' => !empty($responses),
         ];
 
         if (!$authenticated && array_key_exists('Authorization', ($rulesToApply['headers'] ?? []))) {
@@ -174,6 +171,34 @@ class IDocGenerator
 
         return (bool)$authTag;
     }
+
+    /**
+     * @param array $tags
+     *
+     * @return array
+     */
+    protected function getResponseParametersFromDocBlock(array $tags)
+    {
+        $reponses = collect($tags)
+            ->filter(function($tag) {
+                return $tag instanceof Tag && $tag->getName() === 'response';
+            })
+            ->mapWithKeys(function($tag) {
+                preg_match('/([\d]{3})?([\h\S]*)?\n?([\w\W]*)?/m', $tag->getContent(), $content);
+
+                list($_, $status, $description, $content) = $content;
+                $description = trim($description);
+
+                if (!empty($content)) {
+                    $content = $this->parseProperties($content);
+                }
+
+                return [$status => compact('status', 'description', 'content')];
+            })->toArray();
+
+        return $this->generateResponses($reponses);
+    }
+
 
     /**
      * @param ReflectionClass $controller
@@ -298,11 +323,51 @@ class IDocGenerator
             'object' => function() {
                 return '{}';
             },
+            'date' => function() use ($faker) {
+                return $faker->dateTimeThisMonth()->format(\DateTime::ISO8601);
+            },
         ];
 
         $fake = $fakes[$type] ?? $fakes['string'];
 
         return $fake();
+    }
+
+    private function recurisivlyGenerateDummyValues($properties, &$result = [], $path = '')
+    {
+        if (is_array($properties)) {
+            if (isset($properties['items'])) {
+                foreach ($properties['items']['properties'] as $propertyKey => $propertyValue) {
+                    $this->recurisivlyGenerateDummyValues(
+                        $propertyValue,
+                        $result,
+                        "$path.0.$propertyKey"
+                    );
+                }
+            } elseif (isset($properties['properties'])) {
+                ArrayUtil::set($result, $path, $this->recurisivlyGenerateDummyValues(
+                    $properties['properties'],
+                    $result,
+                    $path
+                ));
+            } elseif (isset($properties['type'])) {
+                $example = isset($properties['example'])
+                    ? $properties['example']
+                    : $this->generateDummyValue($properties['type']);
+
+                ArrayUtil::set($result, $path, $example);
+            } else {
+                foreach ($properties as $key => $property) {
+                    $this->recurisivlyGenerateDummyValues(
+                        $property,
+                        $result,
+                        "$path.$key"
+                    );
+                }
+            }
+        }
+
+        return $result;
     }
 
     /**
@@ -325,9 +390,9 @@ class IDocGenerator
     private function parseProperties(string $description)
     {
         if (preg_match('/\s*(properties:\s*(.*)[\w\W]*)/m', $description, $content)) {
-            return $this->parsePropertiesYaml($content[1]);
+            return $this->parseYaml($content[1], 'properties');
         } else {
-            return null;
+            return $description;
         }
     }
 
@@ -360,11 +425,11 @@ class IDocGenerator
         }
     }
 
-    private function parsePropertiesYaml(string $yaml)
+    private function parseYaml(string $yaml, string $key = 'properties')
     {
         try {
             $yaml = Yaml::parse($yaml);
-            return $yaml['properties'];
+            return $yaml[$key];
         } catch (\Exception $e) {
             print_r("Error parsing properties yaml: {$e->getMessage()}");
             return null;
@@ -403,5 +468,43 @@ class IDocGenerator
         }
 
         return $value;
+    }
+
+    /**
+     * Generate the openAPI response object for a route
+     *
+     * @param array $responseContent
+     */
+    private function generateResponses(array $responses)
+    {
+        return array_reduce($responses, function($result, $response) {
+            $status = (int)(isset($response['status']) ? $response['status'] : 200);
+            $description = isset($response['description']) ? $response['description'] : 'success';
+            $contentBody = isset($response['content']) ? $response['content'] : [];
+
+            switch ($status) {
+                case 204:
+                    $content = [];
+                    break;
+                default:
+                    $example = $this->recurisivlyGenerateDummyValues($contentBody);
+                    $content = [
+                        'application/json' => [
+                            'schema' => [
+                                'type' => 'object',
+                                'properties' => $contentBody,
+                                'example' => $example
+                            ]
+                        ]
+                    ];
+            }
+
+            $result[$status] = [
+                'description' => $description,
+                'content' => $content
+            ];
+
+            return $result;
+        }, []);
     }
 }

@@ -328,7 +328,7 @@ class IDocGeneratorCommand extends Command
                                         ->toArray()
                                 ),
 
-                                'responses' => $this->generateResponses($route),
+                                'responses' => $route['responses'],
 
                                 'x-code-samples' => collect(config('idoc.language-tabs'))->map(function($name,
                                     $lang) use ($route) {
@@ -463,47 +463,5 @@ class IDocGeneratorCommand extends Command
         ];
 
         return json_encode(array_merge_recursive($collection, $baseSchema));
-    }
-
-    /**
-     * Generate the openAPI response object for a route
-     *
-     * @param array $responseContent
-     */
-    private function generateResponses(array $route)
-    {
-        if (isset($route['response'])) {
-            if (is_array($route['response'])) {
-                return array_reduce($route['response'], function($result, $response) {
-                    $contentBody = isset($response['content']) ? $response['content'] : '{}';
-                    $status = (int)(isset($response['status']) ? $response['status'] : 200);
-                    $description = 'success';
-
-                    switch ($status) {
-                        case 204:
-                            $content = [];
-                            break;
-                        default:
-                            $content = [
-                                'application/json' => [
-                                    'schema' => [
-                                        'type' => 'object',
-                                        'example' => json_decode($contentBody, true)
-                                    ]
-                                ]
-                            ];
-                    }
-
-                    $result[$status] = [
-                        'description' => $description,
-                        'content' => $content
-                    ];
-
-                    return $result;
-                }, []);
-            }
-        }
-
-        return [200 => ['description' => 'success']];
     }
 }
