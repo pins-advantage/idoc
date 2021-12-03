@@ -22,18 +22,26 @@
 <body>
 <div id="redoc_container"></div>
 <script src="https://cdn.jsdelivr.net/npm/redoc@2.0.0-rc.58/bundles/redoc.standalone.js"></script>
+
 <script>
-    Redoc.init(
-        "{{config('idoc.output') . "/openapi.json"}}", {
-            theme: {
-                logo: {
-                    gutter: '16px'
+    Redoc.init("{{config('idoc.output') . "/openapi.json"}}", {
+            "theme": {
+                "layout": {
+                    "showDarkRightPanel": false,
                 },
-                // sidebar: {
-                //     spacing: {
-                //         paddingHorizontal: '100px'
-                //     }
-                // }
+                "logo": {
+                    "gutter": "300px",
+                    "maxHeight": "150px"
+                },
+                "sidebar": {
+                    "width": "300px",
+                    "textColor": "#000000",
+                },
+                "rightPanel": {
+                    "backgroundColor": "rgba(25, 53, 71, 1)",
+                    "width": "700px",
+                    "textColor": "#ffffff"
+                }
             },
             "showConsole": true,
             "pathInMiddlePanel": true,
