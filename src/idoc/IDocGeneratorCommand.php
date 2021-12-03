@@ -6,10 +6,12 @@ use Illuminate\Console\Command;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Str;
 use Mpociot\Reflection\DocBlock;
 use OVAC\IDoc\Tools\RouteMatcher;
 use ReflectionClass;
 use ReflectionException;
+use Symfony\Component\Yaml\Yaml;
 
 /**
  * This custom generator will parse and generate a beautiful
@@ -90,12 +92,20 @@ class IDocGeneratorCommand extends Command
     private function processRoutes(IDocGenerator $generator, array $routes)
     {
         $parsedRoutes = [];
+
         foreach ($routes as $routeItem) {
             $route = $routeItem['route'];
-            /** @var Route $route */
+
             if ($this->isValidRoute($route) && $this->isRouteVisibleForDocumentation($route->getAction()['uses'])) {
-                $parsedRoutes[] = $generator->processRoute($route, $routeItem['apply']);
-                $this->info('Processed route: [' . implode(',', $generator->getMethods($route)) . '] ' . $generator->getUri($route));
+                $parsedRoute = $generator->processRoute($route, $routeItem['apply']);
+
+                if ($parsedRoute) array_push($parsedRoutes, $parsedRoute);
+
+                $this->info(
+                    'Processed route: [' .
+                    implode(',', $generator->getMethods($route)) . '] ' .
+                    $generator->getUri($route)
+                );
             } else {
                 $this->warn('Skipping route: [' . implode(',', $generator->getMethods($route)) . '] ' . $generator->getUri($route));
             }
@@ -124,6 +134,7 @@ class IDocGeneratorCommand extends Command
     private function isRouteVisibleForDocumentation($route)
     {
         list($class, $method) = explode('@', $route);
+
         $reflection = new ReflectionClass($class);
 
         if (!$reflection->hasMethod($method)) {
@@ -158,189 +169,53 @@ class IDocGeneratorCommand extends Command
 
             return collect($routeGroup)->map(function($route) use ($groupName, $routes, $routeGroup) {
 
-                $methodGroup = $routeGroup->where('uri', $route['uri'])->mapWithKeys(function($route) use (
-                    $groupName, $routes
-                ) {
+                $methodGroup = $routeGroup
+                    ->where('uri', $route['uri'])
+                    ->mapWithKeys(function($route) use ($groupName, $routes) {
 
-                    $bodyParameters = collect($route['bodyParameters'])->map(function($schema, $name) use ($routes) {
+                        $parameters = collect($route['parameters'])
+                            ->map(function($schema, $name) use ($route) {
+                                return [
+                                    'in' => $schema['in'] ?? 'body',
+                                    'name' => $name,
+                                    'description' => $schema['description'],
+                                    'required' => $schema['required'],
+                                    'schema' => [
+                                        'type' => $schema['type'],
+                                        'example' => $schema['value'],
+                                    ]
+                                ];
+                            });
 
-                        $type = $schema['type'];
-                        $default = $schema['value'];
-
-                        if ($type === 'float') {
-                            $type = 'number';
-                        }
-
-                        if (in_array($type, ['json', 'object', 'array']) && $default) {
-                            $type = 'object';
-                            $default = json_decode($default);
-                        }
-
-                        return [
-                            'in' => 'formData',
-                            'name' => $name,
-                            'description' => $schema['description'],
-                            'required' => $schema['required'],
-                            'type' => $type,
-                            'default' => $default,
-                            'properties' => $schema['properties']
-                        ];
-                    });
-
-                    $jsonParameters = [
-                        'application/json' => [
-                            'schema' => ['type' => 'object']
-
-                                + (
-                                count($required = $bodyParameters
-                                    ->values()
-                                    ->where('required', true)
-                                    ->pluck('name'))
-                                    ? ['required' => $required]
-                                    : []
-                                )
-
-                                + (
-                                count($properties = $bodyParameters
-                                    ->values()
-                                    ->filter()
-                                    ->mapWithKeys(function($parameter) use ($routes) {
-                                        return [
-                                            $parameter['name'] => [
-                                                'type' => $parameter['type'],
-                                                'example' => $parameter['default'],
-                                                'description' => $parameter['description'],
-                                                'properties' => $parameter['properties'],
-                                            ],
-                                        ];
-                                    }))
-                                    ? ['properties' => $properties]
-                                    : []
-                                )
-
-                                + (
-                                count($properties = $bodyParameters
-                                    ->values()
-                                    ->filter()
-                                    ->mapWithKeys(
-                                        function($parameter) {
-                                            return [$parameter['name'] => $parameter['default']];
-                                        }
-                                    ))
-                                    ? ['example' => $properties]
-                                    : []
-                                )
-                        ],
-                    ];
-
-                    $queryParameters = collect($route['queryParameters'])->map(function($schema, $name) {
-                        return [
-                            'in' => 'query',
-                            'name' => $name,
-                            'description' => $schema['description'],
-                            'required' => $schema['required'],
-                            'schema' => [
-                                'type' => $schema['type'],
-                                'example' => $schema['value'],
-                            ],
-                        ];
-                    });
-
-                    $pathParameters = collect($route['pathParameters'] ?? [])->map(function($schema, $name) use ($route
-                    ) {
-                        return [
-                            'in' => 'path',
-                            'name' => $name,
-                            'description' => $schema['description'],
-                            'required' => $schema['required'],
-                            'schema' => [
-                                'type' => $schema['type'],
-                                'example' => $schema['value'],
-                            ],
-                        ];
-                    });
-
-                    $headerParameters = collect($route['headers'])->map(function($value, $header) use ($route) {
-
-                        if ($header === 'Authorization') {
-                            return;
-                        }
-
-                        return [
-                            'in' => 'header',
-                            'name' => $header,
-                            'description' => '',
+                        $requestBody = empty($route['bodyParameters']) ? null : [
                             'required' => true,
-                            'schema' => [
-                                'type' => 'string',
-                                'default' => $value,
-                                'example' => $value,
-                            ],
+                            'description' => '',
+                            'content' => [
+                                'application/json' => [
+                                    'schema' => [
+                                        'type' => 'object',
+                                        'properties' => $route['bodyParameters']
+                                    ]
+                                ]
+                            ]
                         ];
-                    });
 
-                    return [
-                        strtolower($route['methods'][0]) => (
-
-                            (
-                            $route['authenticated']
-                                ? ['security' => [
-                                collect(config('idoc.security'))->map(function() {
-                                    return [];
-                                }),
-                            ]]
-                                : []
-                            )
-
-                            + ([
-                                "tags" => [
-                                    $groupName,
-                                ],
+                        return [
+                            strtolower($route['methods'][0]) => [
+                                "tags" => [$groupName],
                                 'operationId' => $route['title'],
                                 'description' => $route['description'],
-                            ]) +
-
-                            (
-                            count(array_intersect(['POST', 'PUT', 'PATCH'], $route['methods']))
-                                ? ['requestBody' => [
-                                'description' => $route['description'],
-                                'required' => true,
-                                'content' => collect($jsonParameters)->filter()->toArray(),
-                            ]]
-                                : []
-                            ) +
-
-                            [
-                                'parameters' => (
-
-                                    array_merge(
-                                        collect($queryParameters->values()->toArray())
-                                            ->filter()
-                                            ->toArray(),
-                                        collect($pathParameters->values()->toArray())
-                                            ->filter()
-                                            ->toArray()
-                                    ) +
-
-                                    collect($headerParameters->values()->toArray())
-                                        ->filter()
-                                        ->values()
-                                        ->toArray()
-                                ),
-
+                                'parameters' => $parameters->values()->toArray(),
+                                'requestBody' => $requestBody,
                                 'responses' => $route['responses'],
-
-                                'x-code-samples' => collect(config('idoc.language-tabs'))->map(function($name,
-                                    $lang) use ($route) {
-                                    return [
+                                'x-code-samples' => collect(config('idoc.language-tabs'))
+                                    ->map(fn($name, $lang) => [
                                         'lang' => $name,
                                         'source' => view('idoc::languages.' . $lang, compact('route'))->render(),
-                                    ];
-                                })->values()->toArray(),
+                                    ])->values()->toArray(),
                             ]
-                        ),
-                    ];
-                });
+                        ];
+                    });
 
                 return collect([
                     ('/' . $route['uri']) => $methodGroup,
@@ -356,9 +231,15 @@ class IDocGeneratorCommand extends Command
             }
         }
 
-        $baseSchema = !empty(config('idoc.base_schema'))
-            ? json_decode(file_get_contents(config('idoc.base_schema')), true)
-            : [];
+        $baseSchema = [];
+
+        if (!empty(config('idoc.base_schema'))) {
+            if (Str::endsWith(config('idoc.base_schema'), ['yml', 'yaml'])) {
+                $baseSchema = Yaml::parse(file_get_contents(config('idoc.base_schema')));
+            } else {
+                $baseSchema = json_decode(file_get_contents(config('idoc.base_schema')), true);
+            }
+        }
 
         $collection = [
 
