@@ -203,7 +203,7 @@ class IDocGeneratorCommand extends Command
                         return [
                             strtolower($route['methods'][0]) => [
                                 "tags" => [$groupName],
-                                'operationId' => $route['title'],
+                                'operationId' => str_replace(' ', '-', strtolower($groupName . '-' . $route['title'])),
                                 'description' => $route['description'],
                                 'parameters' => $parameters->values()->toArray(),
                                 'requestBody' => $requestBody,
